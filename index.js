@@ -1,4 +1,3 @@
-
 const cookieParser = require('cookie-parser');
 const express = require('express');
 const mongoose = require('mongoose');
@@ -8,11 +7,12 @@ const helmet = require('helmet');
 const cors = require('cors');
 const Joi = require('joi');
 require('dotenv').config();
-
-const app = express();
+const jwt = require('jsonwebtoken');
 
 // Import the User model
 const userModel = require('./models/user'); // Adjust path as needed
+
+const app = express();
 
 // Middleware setup
 app.set("view engine", "ejs");
@@ -36,7 +36,8 @@ app.get('/', (req, res) => {
     res.render("index");
 });
 
-app.post('/create', async (req, res) => {
+// User registration
+app.post('/registation', async (req, res) => {
     const { error } = userSchema.validate(req.body);
 
     if (error) {
@@ -47,16 +48,24 @@ app.post('/create', async (req, res) => {
 
     try {
         const saltRounds = 10;
-        const hashedPassword = await bcrypt.hash(password, saltRounds);
+        const hashedPassword = await bcrypt.hash(password, saltRounds); // Hash the password
 
         let createdUser = await userModel.create({
             username,
             email,
-            password: hashedPassword,
+            password: hashedPassword, // Store hashed password
             age
         });
 
-        res.cookie('user_id', createdUser._id.toString(), {
+        // Generate JWT token
+        const token = jwt.sign(
+            { userId: createdUser._id, email: createdUser.email },
+            process.env.JWT_SECRET,
+            { expiresIn: '1d' } // Token expires in 1 day
+        );
+
+        // Store the token as an HTTP-Only cookie
+        res.cookie('token', token, {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
             maxAge: 24 * 60 * 60 * 1000 // 1 day
@@ -76,54 +85,78 @@ app.post('/create', async (req, res) => {
     }
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-    console.error(err.stack);
-    res.status(500).json({ error: 'Something went wrong!', details: err.message });
-});
-
-app.get("/login",function(req,res){
-    res.render('login');
-
-});
-
-// app.post("/login",async function(req,res){
-//     let user=await userModel.findOne({email:req.body.email});
-//     console.log(user);
-// })
-app.post("/login", async function(req, res) {
-    let user = await userModel.findOne({ email: req.body.email });
-
-    if (user) {
-        const match = await bcrypt.compare(req.body.password, user.password);
-
-        if (match) {
-            res.cookie('user_id', user._id.toString(), {
-                httpOnly: true,
-                secure: process.env.NODE_ENV === 'production',
-                maxAge: 24 * 60 * 60 * 1000 // 1 day
-            });
-
-            res.status(200).json({
-                message: "Login successful!",
-                user: {
-                    username: user.username,
-                    email: user.email,
-                    age: user.age
-                }
-            });
-        } else {
-            res.status(401).json({ error: "Invalid password" });
+// User login
+app.post("/login", async function (req, res) {
+    try {
+        const user = await userModel.findOne({ email: req.body.email });
+        if (!user) {
+            return res.status(404).json({ error: "User not found" });
         }
-    } else {
-        res.status(404).json({ error: "User not found" });
+
+        // Compare entered password with hashed password in DB
+        const match = await bcrypt.compare(req.body.password, user.password);
+        if (!match) {
+            return res.status(401).json({ error: "Invalid password" });
+        }
+
+        // Generate JWT token
+        const token = jwt.sign(
+            { userId: user._id, email: user.email },
+            process.env.JWT_SECRET,
+            { expiresIn: '1d' } // Token expires in 1 day
+        );
+
+        // Store the token as an HTTP-Only cookie
+        res.cookie('token', token, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            maxAge: 24 * 60 * 60 * 1000 // 1 day
+        });
+
+        res.status(200).json({
+            message: "Login successful!",
+            user: {
+                username: user.username,
+                email: user.email,
+                age: user.age
+            },
+            token
+        });
+    } catch (error) {
+        console.error('Error during login:', error);
+        res.status(500).json({ error: "Error during login", details: error.message });
     }
 });
 
+// Logout route
+app.get("/logout", function (req, res) {
+    res.clearCookie('token');
+    res.redirect("/");
+});
 
-app.get("/logout",function(req,res){
-res.cookie("token","");
-res.redirect("/");
+// Middleware for JWT verification
+const verifyToken = (req, res, next) => {
+    const token = req.cookies.token;
+
+    if (!token) {
+        return res.status(401).json({ error: "Unauthorized: No token provided" });
+    }
+
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET); // Verify token
+        req.user = decoded; // Attach user payload to request object
+        next();
+    } catch (error) {
+        res.status(403).json({ error: "Forbidden: Invalid token" });
+    }
+};
+
+// Protected route
+app.get('/dashboard', verifyToken, (req, res) => {
+    res.json({
+        message: "Welcome to your dashboard!",
+        user: req.user // Contains the decoded JWT payload
+    });
 });
 
 // Start the server

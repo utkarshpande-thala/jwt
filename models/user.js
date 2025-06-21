@@ -1,7 +1,9 @@
 const mongoose = require('mongoose');
 
-// Connect to MongoDB
-mongoose.connect('mongodb://127.0.0.1:27017/authtestapp')
+// Use a connection string in quotes
+const MONGO_URI = 'mongodb+srv://utkarshpbscit:vyNjoQHgwS03aBbO@cluster0.ej2jna4.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+
+mongoose.connect(MONGO_URI)
     .then(() => console.log('Connected to the database'))
     .catch(err => console.error('Database connection error:', err));
 
